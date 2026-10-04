@@ -16,8 +16,10 @@
 # MAGIC | SE4 | Malmö |
 # MAGIC
 # MAGIC **This is the slowest part of the pipeline on a first run:** four calls per day since
-# MAGIC November 2022 (about 5,700 calls by autumn 2026, growing by 4 a day), 25–45 minutes.
-# MAGIC Files are skipped if already present, so a re-run only fetches new days.
+# MAGIC November 2022 (about 5,700 calls by autumn 2026, growing by 4 a day), roughly two hours.
+# MAGIC Files are skipped if already present, so a re-run only fetches new days. Which files
+# MAGIC exist is read with one listing per folder, not one check per file (see
+# MAGIC `list_existing_days`).
 # MAGIC
 # MAGIC Same conventions as `01`: raw files are the archive, written atomically; the bronze table
 # MAGIC stores every value as text; `_source_file` is the path relative to this source's raw
@@ -59,6 +61,33 @@ def build_price_url(date, price_area):
     return f"{PRICE_API_BASE}/{date.year}/{date.strftime('%m-%d')}_{price_area}.json"
 
 
+def list_existing_days():
+    """Every (area, ISO date) that already has a file, from one listing per folder.
+
+    The volume is cloud storage, so each existence check is a network round trip. Listing
+    each area/year folder once (about 16 calls) and checking against this set in memory
+    replaces one call per day and area (about 11,000 with the gap check), which made a
+    run with nothing new to fetch take ~10 minutes.
+
+    The set is a snapshot taken at the start of the run. That is safe because this notebook
+    is the only writer to the folder and the job allows one run at a time.
+    """
+    existing = set()
+    if not os.path.isdir(RAW_DIRECTORY):
+        return existing
+    for area_directory in os.listdir(RAW_DIRECTORY):
+        price_area = area_directory.split("=")[1]
+        for year_directory in os.listdir(f"{RAW_DIRECTORY}/{area_directory}"):
+            for file_name in os.listdir(f"{RAW_DIRECTORY}/{area_directory}/{year_directory}"):
+                if file_name.endswith(".json"):
+                    existing.add((price_area, file_name.removesuffix(".json")))
+    return existing
+
+
+existing_days = list_existing_days()
+print(f"{len(existing_days)} (area, day) files already present")
+
+
 def fetch_price_day(date, price_area):
     """Download one (date, area) file. Returns fetched, skipped or missing.
 
@@ -70,7 +99,7 @@ def fetch_price_day(date, price_area):
     directory = f"{RAW_DIRECTORY}/elomrade={price_area}/ar={date.year}"
     file_path = f"{directory}/{date.isoformat()}.json"
 
-    if os.path.exists(file_path):
+    if (price_area, date.isoformat()) in existing_days:
         return "skipped"
 
     url = build_price_url(date, price_area)
@@ -96,6 +125,7 @@ def fetch_price_day(date, price_area):
                 with open(temporary_path, "wb") as output_file:
                     output_file.write(response.content)
                 os.replace(temporary_path, file_path)
+                existing_days.add((price_area, date.isoformat()))
                 return "fetched"
 
         wait_seconds = 10 * attempt
@@ -143,8 +173,8 @@ missing_days = []
 current_date = FIRST_DATE
 while current_date <= LAST_DATE - datetime.timedelta(days=GRACE_DAYS):
     for price_area in PRICE_AREAS:
-        file_path = f"{RAW_DIRECTORY}/elomrade={price_area}/ar={current_date.year}/{current_date.isoformat()}.json"
-        if (price_area, current_date.isoformat()) not in KNOWN_MISSING_DAYS and not os.path.exists(file_path):
+        key = (price_area, current_date.isoformat())
+        if key not in KNOWN_MISSING_DAYS and key not in existing_days:
             missing_days.append(f"{price_area} {current_date.isoformat()}")
     current_date += datetime.timedelta(days=1)
 
