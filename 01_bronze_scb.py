@@ -19,7 +19,11 @@
 # COMMAND ----------
 
 dbutils.widgets.text("schema_prefix", "", "Schema prefix (e.g. dev_)")
+# Test only: point at an address that does not exist (e.g. https://scb-api.invalid) to
+# exercise the retries and the error handling end to end. Empty means the real SCB API.
+dbutils.widgets.text("scb_api_base", "", "SCB API base URL override (test only)")
 SCHEMA_PREFIX = dbutils.widgets.get("schema_prefix")
+API_BASE_OVERRIDE = dbutils.widgets.get("scb_api_base").strip()
 
 CATALOG = "axenil_assignment1"
 BRONZE_SCHEMA = f"{SCHEMA_PREFIX}bronze"
@@ -36,7 +40,7 @@ LABELLED_DIMENSIONS = {"Region", "Drivmedel", "Agarkategori"}
 
 FIRST_YEAR = 2016
 
-API_BASE = "https://statistikdatabasen.scb.se/api/v2/tables"
+API_BASE = API_BASE_OVERRIDE or "https://statistikdatabasen.scb.se/api/v2/tables"
 REQUEST_HEADERS = {"User-Agent": "nackademin-laddstolpar-axel"}
 MAXIMUM_ATTEMPTS = 5
 
